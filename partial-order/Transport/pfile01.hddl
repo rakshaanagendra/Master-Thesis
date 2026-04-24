@@ -1,0 +1,50 @@
+(define (problem p)
+ (:domain transport)
+ (:objects
+  city-loc-0 city-loc-1 city-loc-2 - location
+  city-loc-3 city-loc-4 - location
+  truck-0 - vehicle
+  package-0 package-1 - package
+  capacity-0 capacity-1 - capacity-number
+  c0 c1 c2 c3 c4 c5 - cost-number
+ )
+ (:htn
+  :tasks (and
+   (deliver package-0 city-loc-0)
+   (deliver package-1 city-loc-2)
+   )
+  :ordering ( )
+  :constraints ( ))
+ (:init
+  (capacity-predecessor capacity-0 capacity-1)
+  (road city-loc-0 city-loc-1)
+  (road city-loc-1 city-loc-0)
+  (road city-loc-1 city-loc-2)
+  (road city-loc-2 city-loc-1)
+  (road city-loc-0 city-loc-2)        ;; 
+  (road city-loc-2 city-loc-0)
+  (road city-loc-2 city-loc-0)
+  (road city-loc-0 city-loc-3)
+  (road city-loc-3 city-loc-4)
+  (road city-loc-4 city-loc-1)        ;;   ALTERNATIVE ROUTES FOR BLOCKED CONDITION
+  (at package-0 city-loc-1)
+  (at package-1 city-loc-1)
+  (at truck-0 city-loc-2)
+  (capacity truck-0 capacity-1)
+  (total-cost c0)                      
+  (cost-predecessor c0 c1)
+  (cost-predecessor c1 c2)
+  (cost-predecessor c2 c3)
+  (cost-predecessor c3 c4)
+  (cost-predecessor c4 c5)                      ;;  ADDED
+  (distance city-loc-2 city-loc-1 c1)
+  (distance city-loc-1 city-loc-2 c1)
+  (distance city-loc-1 city-loc-0 c1)
+  (distance city-loc-0 city-loc-1 c1)
+  (distance city-loc-2 city-loc-0 c1)
+  (distance city-loc-0 city-loc-2 c1)
+  (blocked city-loc-1 city-loc-0)               ;;  ADDED
+  (risky city-loc-2 city-loc-1)                 ;;  ADDED        
+        
+)
+)
