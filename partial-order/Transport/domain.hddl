@@ -1,39 +1,60 @@
 (define (domain transport)
   (:requirements :negative-preconditions :hierarchy :typing)
+
   (:types
         location target locatable - object
         vehicle package - locatable
-        capacity-number cost-number - object
+        capacity-number cost-number retry-level - object
   )
 
   (:predicates 
      (road ?l1 ?l2 - location)
      (at ?x - locatable ?v - location)
      (in ?x - package ?v - vehicle)
+
+     ;; capacity
      (capacity ?v - vehicle ?s1 - capacity-number)
      (capacity-predecessor ?s1 ?s2 - capacity-number)
-     (total-cost ?c - cost-number) - ADDED
-     (cost-predecessor ?c1 ?c2 - cost-number)  ;; ADDED
-     (distance ?l1 ?l2 - location ?c - cost-number)  ;; ADDED
-     (blocked ?l1 ?l2 - location)  ;; ADDED
-     (risky ?l1 ?l2 - location)  ;; ADDED
-     (failed-drive ?v - vehicle)  ;; ADDED
+
+     ;; cost modeling
+     (total-cost ?c - cost-number)
+     (cost-predecessor ?c1 ?c2 - cost-number)
+
+     ;; constraints
+     (blocked ?l1 ?l2 - location)
+     (risky ?l1 ?l2 - location)
+
+     ;; failure handling
+     (failed-drive ?v - vehicle)
+
+     ;; retry control (NEW)
+     (retry ?r - retry-level)
+     (retry-predecessor ?r1 ?r2 - retry-level)
   )
 
+  ;; ================= TASKS =================
   (:task deliver :parameters (?p - package ?l - location))
   (:task get-to :parameters (?v - vehicle ?l - location))
   (:task load :parameters (?v - vehicle ?l - location ?p - package))
   (:task unload :parameters (?v - vehicle ?l - location ?p - package))
-  (:task risky-drive :parameters (?v ?l1 ?l2))  ;; ADDED
+  (:task risky-drive :parameters (?v - vehicle ?l1 ?l2 - location))
+
+  ;; ================= METHODS =================
 
   (:method m-deliver
     :parameters (?p - package ?l1 ?l2 - location ?v - vehicle)
     :task (deliver ?p ?l2)
-     :ordered-subtasks (and
+    :ordered-subtasks (and
       (get-to ?v ?l1)
       (load ?v ?l1 ?p)
       (get-to ?v ?l2)
       (unload ?v ?l2 ?p))
+  )
+
+  (:method m-load
+    :parameters (?v - vehicle ?l - location ?p - package ?s1 ?s2 - capacity-number)
+    :task (load ?v ?l ?p)
+    :subtasks (pick-up ?v ?l ?p ?s1 ?s2)
   )
 
   (:method m-unload
@@ -42,209 +63,195 @@
     :subtasks (drop ?v ?l ?p ?s1 ?s2)
   )
 
-  (:method m-load
-    :parameters (?v - vehicle ?l - location ?p - package ?s1 ?s2 - capacity-number)
-    :task (load  ?v ?l ?p)
-    :subtasks (pick-up ?v ?l ?p ?s1 ?s2)
-  )
-  
+  ;; ================= SAFE DRIVE =================
   (:method m-drive-safe
-  :parameters (?v ?l1 ?l2 ?c1 ?c2)
-  :task (get-to ?v ?l2)
-  :precondition (and
+    :parameters (?v - vehicle ?l1 ?l2 - location ?c1 ?c2 - cost-number)
+    :task (get-to ?v ?l2)
+    :precondition (and
       (at ?v ?l1)
       (road ?l1 ?l2)
       (not (risky ?l1 ?l2))
+      (not (blocked ?l1 ?l2))
       (cost-predecessor ?c1 ?c2)
       (total-cost ?c1)
-  )
-  :ordered-subtasks (and
+    )
+    :ordered-subtasks (and
       (drive ?v ?l1 ?l2)
       (increase-cost ?c1 ?c2)
-  )
+    )
   )
 
+  ;; ================= RISKY DRIVE =================
   (:method m-drive-risky
-  :parameters (?v ?l1 ?l2 ?c1 ?c2)
-  :task (get-to ?v ?l2)
-  :precondition (and
+    :parameters (?v - vehicle ?l1 ?l2 - location)
+    :task (get-to ?v ?l2)
+    :precondition (and
       (at ?v ?l1)
       (road ?l1 ?l2)
       (risky ?l1 ?l2)
-      (total-cost ?c1)
-  )
-  :ordered-subtasks (and
+      (not (blocked ?l1 ?l2))
+    )
+    :ordered-subtasks (and
       (risky-drive ?v ?l1 ?l2)
-      ;; cost handled through retries
-  )
+    )
   )
 
+  ;; ================= RECURSIVE NAVIGATION =================
   (:method m-drive-to-via
     :parameters (?v - vehicle ?l2 ?l3 - location)
-    :task (get-to  ?v ?l3)
+    :task (get-to ?v ?l3)
     :ordered-subtasks (and
-        (get-to ?v ?l2)
-        (drive ?v ?l2 ?l3))  
+      (get-to ?v ?l2)
+      (get-to ?v ?l3)
+    )
   )
-
-  (:method risky-drive-success
-  :parameters (?v ?l1 ?l2 ?c1 ?c2)
-  :task (risky-drive ?v ?l1 ?l2)
-  :precondition (and
-      (cost-predecessor ?c1 ?c2)
-      (total-cost ?c1)
-  )
-  :ordered-subtasks (and
-      (drive-risky-success ?v ?l1 ?l2)
-      (increase-cost ?c1 ?c2)
-  )
-)
-
-  (:method risky-drive-fail
-  :parameters (?v ?l1 ?l2 ?c1 ?c2)
-  :task (risky-drive ?v ?l1 ?l2)
-  :precondition (and
-      (cost-predecessor ?c1 ?c2)
-      (total-cost ?c1)
-  )
-  :ordered-subtasks (and
-      (drive-risky-fail ?v ?l1 ?l2)
-      (increase-cost ?c1 ?c2)
-      (recover-drive ?v)
-      (risky-drive ?v ?l1 ?l2)  ;; recursion and retry
-  )
-)
 
   (:method m-i-am-there
     :parameters (?v - vehicle ?l - location)
-    :task (get-to  ?v ?l)
-    :subtasks (and
-        (noop ?v ?l))
+    :task (get-to ?v ?l)
+    :subtasks (noop ?v ?l)
   )
 
-;;  (:method drive-cost-1
-  :parameters (?v ?l1 ?l2 ?c1 ?c2)
-  :task (get-to ?v ?l2)
-  :precondition (distance ?l1 ?l2 c1)
-  :ordered-subtasks (and
-      (drive ?v ?l1 ?l2)
+  ;; ================= RISKY DRIVE EXECUTION =================
+
+  ;; SUCCESS CASE
+  (:method risky-drive-success
+    :parameters (?v - vehicle ?l1 ?l2 - location ?c1 ?c2 - cost-number)
+    :task (risky-drive ?v ?l1 ?l2)
+    :precondition (and
+      (cost-predecessor ?c1 ?c2)
+      (total-cost ?c1)
+    )
+    :ordered-subtasks (and
+      (drive-risky-success ?v ?l1 ?l2)
       (increase-cost ?c1 ?c2)
+    )
   )
-  
-;;  (:method drive-cost-2
-  :parameters (?v ?l1 ?l2 ?c1 ?c2 ?c3)
-  :task (get-to ?v ?l2)
-  :precondition (distance ?l1 ?l2 c2)
-  :ordered-subtasks (and
-      (drive ?v ?l1 ?l2)
+
+  ;; FAILURE + RETRY (BOUNDED)
+  (:method risky-drive-fail
+    :parameters (?v - vehicle ?l1 ?l2 - location 
+                 ?c1 ?c2 - cost-number 
+                 ?r1 ?r2 - retry-level)
+    :task (risky-drive ?v ?l1 ?l2)
+    :precondition (and
+      (cost-predecessor ?c1 ?c2)
+      (total-cost ?c1)
+      (retry ?r2)
+      (retry-predecessor ?r1 ?r2)
+    )
+    :ordered-subtasks (and
+      (drive-risky-fail ?v ?l1 ?l2)
       (increase-cost ?c1 ?c2)
-      (increase-cost ?c2 ?c3)
+      (recover-drive ?v)
+      (decrease-retry ?r2 ?r1)
+      (risky-drive ?v ?l1 ?l2)
+    )
   )
-  
-;;  (:method drive-cost-3
-  :parameters (?v ?l1 ?l2 ?c1 ?c2 ?c3 ?c4)
-  :task (get-to ?v ?l2)
-  :precondition (distance ?l1 ?l2 c3)
-  :ordered-subtasks (and
-      (drive ?v ?l1 ?l2)
-      (increase-cost ?c1 ?c2)
-      (increase-cost ?c2 ?c3)
-      (increase-cost ?c3 ?c4)
-  )tra
-  
+
+  ;; ================= ACTIONS =================
+
   (:action drive
-  :parameters (?v - vehicle ?l1 ?l2 - location)
-  :precondition (and
+    :parameters (?v - vehicle ?l1 ?l2 - location)
+    :precondition (and
       (at ?v ?l1)
       (road ?l1 ?l2)
       (not (blocked ?l1 ?l2))
-  )
-  :effect (and
+    )
+    :effect (and
       (not (at ?v ?l1))
       (at ?v ?l2)
+    )
   )
-)
+
   (:action drive-risky-success
-  :parameters (?v - vehicle ?l1 ?l2 - location)
-  :precondition (and
+    :parameters (?v - vehicle ?l1 ?l2 - location)
+    :precondition (and
       (at ?v ?l1)
       (road ?l1 ?l2)
       (risky ?l1 ?l2)
-  )
-  :effect (and
+    )
+    :effect (and
       (not (at ?v ?l1))
       (at ?v ?l2)
+    )
   )
-)
-   
+
   (:action drive-risky-fail
-  :parameters (?v - vehicle ?l1 ?l2 - location)
-  :precondition (and
+    :parameters (?v - vehicle ?l1 ?l2 - location)
+    :precondition (and
       (at ?v ?l1)
       (road ?l1 ?l2)
       (risky ?l1 ?l2)
+    )
+    :effect (failed-drive ?v)
   )
-  :effect (and
-      (failed-drive ?v)
+
+  (:action recover-drive
+    :parameters (?v - vehicle)
+    :precondition (failed-drive ?v)
+    :effect (not (failed-drive ?v))
   )
-)
+
+  (:action increase-cost
+    :parameters (?c1 ?c2 - cost-number)
+    :precondition (and
+      (cost-predecessor ?c1 ?c2)
+      (total-cost ?c1)
+    )
+    :effect (and
+      (not (total-cost ?c1))
+      (total-cost ?c2)
+    )
+  )
+
+  (:action decrease-retry
+    :parameters (?r2 ?r1 - retry-level)
+    :precondition (and
+      (retry ?r2)
+      (retry-predecessor ?r1 ?r2)
+    )
+    :effect (and
+      (not (retry ?r2))
+      (retry ?r1)
+    )
+  )
 
   (:action noop
-    :parameters (?v - vehicle ?l2 - location)
-    :precondition (at ?v ?l2)
+    :parameters (?v - vehicle ?l - location)
+    :precondition (at ?v ?l)
     :effect ()
   )
 
- (:action pick-up
+  (:action pick-up
     :parameters (?v - vehicle ?l - location ?p - package ?s1 ?s2 - capacity-number)
     :precondition (and
-        (at ?v ?l)
-        (at ?p ?l)
-        (capacity-predecessor ?s1 ?s2)
-        (capacity ?v ?s2)
-      )
+      (at ?v ?l)
+      (at ?p ?l)
+      (capacity-predecessor ?s1 ?s2)
+      (capacity ?v ?s2)
+    )
     :effect (and
-        (not (at ?p ?l))
-        (in ?p ?v)
-        (capacity ?v ?s1)
-        (not (capacity ?v ?s2))
-      )
+      (not (at ?p ?l))
+      (in ?p ?v)
+      (capacity ?v ?s1)
+      (not (capacity ?v ?s2))
+    )
   )
 
   (:action drop
     :parameters (?v - vehicle ?l - location ?p - package ?s1 ?s2 - capacity-number)
     :precondition (and
-        (at ?v ?l)
-        (in ?p ?v)
-        (capacity-predecessor ?s1 ?s2)
-        (capacity ?v ?s1)
-      )
+      (at ?v ?l)
+      (in ?p ?v)
+      (capacity-predecessor ?s1 ?s2)
+      (capacity ?v ?s1)
+    )
     :effect (and
-        (not (in ?p ?v))
-        (at ?p ?l)
-        (capacity ?v ?s2)
-        (not (capacity ?v ?s1))
-      )
+      (not (in ?p ?v))
+      (at ?p ?l)
+      (capacity ?v ?s2)
+      (not (capacity ?v ?s1))
+    )
   )
-  
-  (:action increase-cost
-  :parameters (?c1 ?c2 - cost-number)
-  :precondition (and
-      (cost-predecessor ?c1 ?c2)
-      (total-cost ?c1)
-  )
-  :effect (and
-      (not (total-cost ?c1))
-      (total-cost ?c2)
-  )
-)
-
-  (:action recover-drive
-  :parameters (?v - vehicle)
-  :precondition (failed-drive ?v)
-  :effect (and
-      (not (failed-drive ?v))
-  )
-)
-
 )
